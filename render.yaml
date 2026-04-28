@@ -1,12 +1,31 @@
 services:
+  # Phase 1 Cron Job
   - type: cron
-    name: zoho-job-scraper
+    name: zoho-scraper-phase1
     runtime: python
     buildCommand: |
       pip install -r requirements.txt
       playwright install chromium
       playwright install-deps
-    startCommand: python script.py
+    startCommand: python phase1_scraper.py
+    schedule: "0 */8 * * *"  # Runs every 8 hours
+    envVars:
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: "0"
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
+        value: "0"
+  
+  # Phase 2 Cron Job (Runs 1 hour after Phase 1)
+  - type: cron
+    name: zoho-scraper-phase2
+    runtime: python
+    buildCommand: |
+      pip install -r requirements.txt
+      playwright install chromium
+      playwright install-deps
+    startCommand: python phase2_scraper.py
     schedule: "0 */8 * * *"  # Runs every 8 hours
     envVars:
       - key: PLAYWRIGHT_BROWSERS_PATH
