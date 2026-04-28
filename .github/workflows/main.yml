@@ -18,22 +18,13 @@ jobs:
       with:
         python-version: '3.11'
     
-    - name: List files (debug)
-      run: ls -la
-    
     - name: Install dependencies
       run: |
-        pip install playwright beautifulsoup4 lxml
+        pip install playwright beautifulsoup4 lxml requests
         playwright install chromium --with-deps
-    
-    - name: Check Python syntax
-      run: python -m py_compile find_companes.py
     
     - name: Run scraper
       run: python find_companes.py
-    
-    - name: List output files
-      run: ls -la *.csv || echo "No CSV files found"
     
     - name: Upload results
       if: always()
@@ -43,5 +34,4 @@ jobs:
         path: |
           *.csv
           *.json
-          *.txt
         retention-days: 30
