@@ -20,11 +20,46 @@ jobs:
     
     - name: Install dependencies
       run: |
-        pip install playwright beautifulsoup4 lxml requests
+        pip install playwright beautifulsoup4 lxml
         playwright install chromium --with-deps
     
-    - name: Run scraper
-      run: python find_companes.py
+    - name: Run Phase 1 - Scrape Company Names
+      run: |
+        echo "========================================="
+        echo "🚀 STARTING PHASE 1 - COMPANY NAME SCRAPER"
+        echo "========================================="
+        python -u phase1_scraper.py
+      shell: bash
+    
+    - name: List Phase 1 Results
+      run: |
+        echo "========================================="
+        echo "📁 PHASE 1 OUTPUT FILES"
+        echo "========================================="
+        ls -la *.csv 2>/dev/null || echo "No CSV files yet"
+        wc -l All_Zoho_Companies_With_Source.csv 2>/dev/null || echo "File not created yet"
+    
+    - name: Run Phase 2 - Extract Contact Info
+      run: |
+        echo "========================================="
+        echo "🚀 STARTING PHASE 2 - CONTACT INFO EXTRACTOR"
+        echo "========================================="
+        python -u phase2_contacts.py
+      shell: bash
+    
+    - name: List Final Results
+      run: |
+        echo "========================================="
+        echo "📊 FINAL OUTPUT SUMMARY"
+        echo "========================================="
+        echo "Phase 1 Output:"
+        ls -la All_Zoho_Companies_With_Source.csv 2>/dev/null && wc -l All_Zoho_Companies_With_Source.csv
+        echo ""
+        echo "Phase 2 Output:"
+        ls -la companies_contacts_fixed.csv 2>/dev/null && wc -l companies_contacts_fixed.csv
+        echo ""
+        echo "Progress Files:"
+        ls -la *.json 2>/dev/null
     
     - name: Upload results
       if: always()
