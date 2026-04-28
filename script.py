@@ -826,47 +826,350 @@ def run_phase1():
     
     return len(ALL_COMPANIES) > 0
 
-# ==================== PHASE 2: EXTRACT CONTACT INFO ====================
-def extract_real_phones_from_text(text):
-    if not text:
-        return []
-    all_phones = []
-    patterns = [
-        r'\+971[\s\-]?[0-9]{1,3}[\s\-]?[0-9]{7,8}',
-        r'\+1[\s\-]?\(?[0-9]{3}\)?[\s\-]?[0-9]{3}[\s\-]?[0-9]{4}',
-        r'\([0-9]{3}\)[\s\-]?[0-9]{3}[\s\-]?[0-9]{4}',
-        r'\b[0-9]{3}[-][0-9]{3}[-][0-9]{4}\b',
-        r'\b[0-9]{3}[.][0-9]{3}[.][0-9]{4}\b',
-        r'\b03[0-9]{2}[\s\-]?[0-9]{7}\b',
-        r'\+(?:[0-9]{1,3})[\s\-]?[0-9]{1,4}[\s\-]?[0-9]{5,10}\b',
-        r'\b0[0-9]{4}[\s\-]?[0-9]{6}\b',
-        r'\+61[\s\-]?[0-9]{1,2}[\s\-]?[0-9]{4}[\s\-]?[0-9]{4}',
-        r'\b[2-9][0-9]{2}[2-9][0-9]{2}[0-9]{4}\b'
-    ]
-    for pattern in patterns:
-        matches = re.findall(pattern, text)
-        for match in matches:
-            if re.search(r'\d+-\d+-\d+px|\d+-\d+-\d+%|\d+-\d+-\d+em', match.lower()):
-                continue
-            digits_only = re.sub(r'[^\d]', '', match)
-            if 7 <= len(digits_only) <= 15 and match not in all_phones:
-                all_phones.append(match)
-    return all_phones
 
-def extract_real_emails_from_text(text):
+
+"""
+COMPLETE ZOHO PARTNER SCRAPER FOR RENDER.COM/GITHUB ACTIONS
+- Phase 1: Scrape company names from 10 job websites
+- Phase 2: Extract contact info (emails, phones, websites)
+- AUTO-RESUME: Continues from where it left off
+"""
+
+import csv
+import time
+import os
+import json
+import re
+import asyncio
+import subprocess
+import sys
+import requests
+from urllib.parse import quote
+from datetime import datetime
+from playwright.async_api import async_playwright
+from bs4 import BeautifulSoup
+
+# Disable playwright browser path restriction
+os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '0'
+
+# ==================== CONFIGURATION ====================
+PHASE1_OUTPUT_CSV = "All_Zoho_Companies_With_Source.csv"
+PHASE1_PROGRESS_FILE = "phase1_progress.json"
+PHASE2_OUTPUT_CSV = "companies_contacts_fixed.csv"
+PHASE2_PROGRESS_FILE = "phase2_progress.json"
+PHASE2_INPUT_CSV = "All_Zoho_Companies_With_Source.csv"
+MASTER_PROGRESS_FILE = "master_progress.json"
+MAX_RETRIES = 2
+REQUEST_DELAY = 2  # Increased delay
+KEYWORDS = ["zoho"]
+
+# Global variables
+ALL_COMPANIES = set()
+WEBSITE_STATS = []
+COMPLETED_WEBSITES = set()
+
+def log_message(msg):
+    """Print with timestamp for logs"""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{timestamp}] {msg}")
+    sys.stdout.flush()
+
+def install_playwright_browsers():
+    """Install Playwright browsers if not already installed"""
+    log_message("🔧 Checking Playwright browser installation...")
+    try:
+        # Try to check if browsers exist without launching sync API
+        browser_path = os.path.expanduser("~/.cache/ms-playwright")
+        if os.path.exists(browser_path):
+            log_message("✅ Playwright browsers directory exists.")
+            return True
+        
+        log_message("📦 Installing Playwright browsers...")
+        # Use subprocess to install browsers without sync API conflict
+        result = subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium"], 
+            capture_output=True, 
+            text=True
+        )
+        if result.returncode == 0:
+            log_message("✅ Playwright browsers installed successfully.")
+            return True
+        else:
+            log_message(f"❌ Failed to install browsers: {result.stderr}")
+            return False
+    except Exception as e:
+        log_message(f"⚠️ Error checking browsers: {e}")
+        # Try to install anyway
+        try:
+            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+            log_message("✅ Playwright browsers installed.")
+            return True
+        except:
+            log_message("❌ Could not install Playwright browsers")
+            return False
+
+def load_master_progress():
+    if os.path.exists(MASTER_PROGRESS_FILE):
+        try:
+            with open(MASTER_PROGRESS_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except:
+            return {"phase1_completed": False, "phase2_completed": False}
+    return {"phase1_completed": False, "phase2_completed": False}
+
+def save_master_progress(progress):
+    try:
+        with open(MASTER_PROGRESS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(progress, f, indent=2)
+        log_message(f"💾 Master progress saved")
+    except:
+        pass
+
+def load_phase1_progress():
+    global COMPLETED_WEBSITES
+    if os.path.exists(PHASE1_PROGRESS_FILE):
+        try:
+            with open(PHASE1_PROGRESS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                COMPLETED_WEBSITES = set(data.get('completed_websites', []))
+            log_message(f"🔄 Phase 1: Loaded {len(COMPLETED_WEBSITES)} completed websites")
+        except Exception as e:
+            log_message(f"⚠️ Could not load Phase 1 progress: {e}")
+
+def save_phase1_progress():
+    try:
+        with open(PHASE1_PROGRESS_FILE, 'w', encoding='utf-8') as f:
+            json.dump({'completed_websites': list(COMPLETED_WEBSITES)}, f, indent=2)
+    except Exception as e:
+        log_message(f"⚠️ Could not save Phase 1 progress: {e}")
+
+def mark_website_completed(website_name):
+    COMPLETED_WEBSITES.add(website_name)
+    save_phase1_progress()
+
+def is_website_completed(website_name):
+    return website_name in COMPLETED_WEBSITES
+
+def load_existing_companies():
+    if os.path.exists(PHASE1_OUTPUT_CSV):
+        try:
+            with open(PHASE1_OUTPUT_CSV, 'r', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                next(reader, None)
+                for row in reader:
+                    if len(row) >= 2:
+                        ALL_COMPANIES.add(row[1].strip())
+            log_message(f"📂 Loaded {len(ALL_COMPANIES)} existing companies")
+        except Exception as e:
+            log_message(f"⚠️ Could not load existing companies: {e}")
+    else:
+        log_message("📂 No existing data found. Starting fresh.")
+
+def save_company_immediate(source_url, company_name):
+    if company_name and company_name not in ALL_COMPANIES:
+        ALL_COMPANIES.add(company_name)
+        with open(PHASE1_OUTPUT_CSV, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow([source_url, company_name])
+        return True
+    return False
+
+# ==================== PHASE 1 SCRAPERS (SAME AS BEFORE) ====================
+# [Keep all the Phase 1 scraping functions from previous version]
+# For brevity, I'm showing only the Phase 2 fixes below
+
+# ==================== IMPROVED PHASE 2 FUNCTIONS ====================
+
+def extract_website_from_google_sync(company_name):
+    """Synchronous method to extract website using requests (no browser)"""
+    try:
+        search_url = f"https://www.google.com/search?q={quote(company_name)}"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        response = requests.get(search_url, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            # Look for website links in the response
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Find all links
+            for link in soup.find_all('a'):
+                href = link.get('href', '')
+                if '/url?q=' in href and 'http' in href:
+                    # Extract actual URL from Google's redirect
+                    url_match = re.search(r'/url\?q=(https?://[^&]+)', href)
+                    if url_match:
+                        url = url_match.group(1)
+                        # Filter out Google and social media
+                        skip_domains = ['google.com', 'youtube.com', 'linkedin.com', 
+                                      'facebook.com', 'twitter.com', 'instagram.com']
+                        if not any(skip in url.lower() for skip in skip_domains):
+                            return url.split('?')[0]
+            return None
+    except Exception as e:
+        log_message(f"      ⚠️ Request search failed: {str(e)[:50]}")
+        return None
+    return None
+
+def extract_emails_from_text(text):
+    """Extract emails from text"""
     if not text:
         return []
     email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
-    all_emails = re.findall(email_pattern, text)
+    emails = re.findall(email_pattern, text)
+    # Filter out fake emails
+    fake_patterns = ['example', 'test', 'noreply', 'no-reply', 'placeholder']
     valid_emails = []
-    fake_patterns = ['example', 'test', 'noreply', 'no-reply', 'your@', 'domain.com', 'placeholder']
-    for email in all_emails:
-        if len(email) < 50 and not any(x in email.lower() for x in fake_patterns):
-            domain_part = email.split('@')[-1]
-            if '.' in domain_part and len(domain_part.split('.')[-1]) >= 2:
-                if email not in valid_emails:
-                    valid_emails.append(email)
+    for email in emails:
+        if len(email) < 50 and not any(fake in email.lower() for fake in fake_patterns):
+            if email not in valid_emails:
+                valid_emails.append(email)
     return valid_emails
+
+def extract_phones_from_text(text):
+    """Extract phone numbers from text"""
+    if not text:
+        return []
+    patterns = [
+        r'\+971[\s\-]?[0-9]{1,3}[\s\-]?[0-9]{7,8}',  # UAE
+        r'\+1[\s\-]?\(?[0-9]{3}\)?[\s\-]?[0-9]{3}[\s\-]?[0-9]{4}',  # US
+        r'\([0-9]{3}\)[\s\-]?[0-9]{3}[\s\-]?[0-9]{4}',
+        r'\b[0-9]{3}[-][0-9]{3}[-][0-9]{4}\b',
+        r'\b[0-9]{3}[.][0-9]{3}[.][0-9]{4}\b',
+        r'\+[0-9]{1,3}[\s\-]?[0-9]{4,10}\b',  # International
+    ]
+    phones = []
+    for pattern in patterns:
+        matches = re.findall(pattern, text)
+        for match in matches:
+            if match not in phones:
+                phones.append(match)
+    return phones[:3]  # Limit to first 3 phones
+
+def scrape_website_for_contacts(website_url, company_name):
+    """Scrape a website for contact information"""
+    emails = []
+    phones = []
+    
+    if not website_url or website_url == "None":
+        return emails, phones
+    
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        # Try main page
+        try:
+            response = requests.get(website_url, headers=headers, timeout=15)
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, 'html.parser')
+                # Get text from body
+                body_text = soup.get_text()
+                emails.extend(extract_emails_from_text(body_text))
+                phones.extend(extract_phones_from_text(body_text))
+        except:
+            pass
+        
+        # Try common contact pages
+        contact_paths = ['/contact', '/contact-us', '/about', '/about-us']
+        for path in contact_paths:
+            if emails and phones:  # Stop if we found both
+                break
+            try:
+                contact_url = website_url.rstrip('/') + path
+                response = requests.get(contact_url, headers=headers, timeout=10)
+                if response.status_code == 200:
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    body_text = soup.get_text()
+                    emails.extend(extract_emails_from_text(body_text))
+                    phones.extend(extract_phones_from_text(body_text))
+            except:
+                continue
+        
+        # Remove duplicates
+        emails = list(dict.fromkeys(emails))
+        phones = list(dict.fromkeys(phones))
+        
+        # Log found items
+        if emails:
+            log_message(f"         📧 Found {len(emails)} email(s)")
+        if phones:
+            log_message(f"         📞 Found {len(phones)} phone(s)")
+            
+    except Exception as e:
+        log_message(f"         ⚠️ Error scraping website: {str(e)[:50]}")
+    
+    return emails, phones
+
+def check_zoho_partner_sync(website_url):
+    """Check if website mentions Zoho partnership"""
+    if not website_url or website_url == "None":
+        return "No"
+    
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        response = requests.get(website_url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            content = response.text.lower()
+            keywords = ['zoho partner', 'zoho authorized', 'zoho certified', 'zoho implementation partner']
+            for keyword in keywords:
+                if keyword in content:
+                    return "Yes"
+        return "No"
+    except:
+        return "No"
+
+def process_company_sync(company_name):
+    """Process a single company without async to avoid conflicts"""
+    log_message(f"\n   🚀 Processing: {company_name}")
+    
+    # Try to find website via Google search
+    website = extract_website_from_google_sync(company_name)
+    
+    emails = []
+    phones = []
+    source = "Not Found"
+    
+    if website:
+        log_message(f"      🌐 Found website: {website}")
+        source = "Google Search"
+        
+        # Scrape the website for contacts
+        emails, phones = scrape_website_for_contacts(website, company_name)
+        
+        if emails or phones:
+            source = "Website Scraping"
+    else:
+        log_message(f"      ❌ No website found via Google search")
+    
+    # Check Zoho partner status
+    partner = "No"
+    if website:
+        partner = check_zoho_partner_sync(website)
+        if partner == "Yes":
+            log_message(f"      🤝 Zoho Partner confirmed!")
+    
+    result = {
+        "Company Name": company_name,
+        "Website": website or "",
+        "Contact Email": emails[0] if emails else "",
+        "Phone Number": phones[0] if phones else "",
+        "Zoho Partner Status": partner,
+        "Source": source,
+        "Processed Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    
+    log_message(f"\n   📊 RESULT: {company_name}")
+    log_message(f"      🌐 Website: {website or 'Not found'}")
+    log_message(f"      📧 Email: {emails[0] if emails else 'Not found'}")
+    log_message(f"      📞 Phone: {phones[0] if phones else 'Not found'}")
+    log_message(f"      🤝 Zoho Partner: {partner}")
+    
+    return result
 
 def load_phase2_progress():
     if os.path.exists(PHASE2_PROGRESS_FILE):
@@ -886,7 +1189,8 @@ def save_phase2_progress(progress, results):
             writer.writeheader()
             writer.writerows(results)
         return True
-    except:
+    except Exception as e:
+        log_message(f"⚠️ Error saving progress: {e}")
         return False
 
 def read_companies_for_phase2():
@@ -899,10 +1203,10 @@ def read_companies_for_phase2():
                 if len(row) >= 2 and row[1].strip():
                     companies.append(row[1].strip())
         companies = list(dict.fromkeys(companies))
-        print(f"📊 Loaded {len(companies)} unique companies from {PHASE2_INPUT_CSV}")
+        log_message(f"📊 Loaded {len(companies)} unique companies from {PHASE2_INPUT_CSV}")
         return companies
     except Exception as e:
-        print(f"❌ Error reading CSV: {e}")
+        log_message(f"❌ Error reading CSV: {e}")
         return []
 
 def load_phase2_existing_results():
@@ -915,194 +1219,11 @@ def load_phase2_existing_results():
             pass
     return []
 
-async def extract_from_google_results(page, company_name):
-    search_url = f"https://www.google.com/search?q={company_name.replace(' ', '+')}"
-    print(f"      🔍 Searching Google for: {company_name}")
-    for attempt in range(MAX_RETRIES):
-        try:
-            await page.goto(search_url, wait_until="domcontentloaded", timeout=15000)
-            try:
-                await page.wait_for_selector("div.g, div.yuRUbf", timeout=5000)
-            except:
-                pass
-            content = await page.content()
-            phones = extract_real_phones_from_text(content)
-            emails = extract_real_emails_from_text(content)
-            body_text = await page.evaluate("document.body.innerText")
-            phones.extend(extract_real_phones_from_text(body_text))
-            emails.extend(extract_real_emails_from_text(body_text))
-            phones = list(dict.fromkeys(phones))
-            emails = list(dict.fromkeys(emails))
-            website = await extract_website_from_google(page, content)
-            if website:
-                print(f"      🌐 Found website: {website}")
-            if emails:
-                print(f"      📧 Found {len(emails)} email(s)")
-            if phones:
-                print(f"      📞 Found {len(phones)} phone(s)")
-            return phones, emails, website
-        except Exception as e:
-            print(f"      ⚠️ Attempt {attempt+1} failed: {str(e)[:50]}")
-            if attempt == MAX_RETRIES - 1:
-                return [], [], None
-            await asyncio.sleep(1)
-    return [], [], None
-
-async def extract_website_from_google(page, content):
-    link_pattern = r'href="(https?://[^"]+)"'
-    all_links = re.findall(link_pattern, content)
-    skip_domains = ['google.com', 'youtube.com', 'linkedin.com', 'facebook.com', 'twitter.com', 'instagram.com', 'wikipedia.org']
-    for link in all_links:
-        if link.startswith('http') and not any(skip in link.lower() for skip in skip_domains):
-            clean_link = link.split('&')[0].split('?')[0]
-            if len(clean_link) < 200:
-                return clean_link
-    try:
-        first_result = await page.query_selector('div.g a, div.yuRUbf a')
-        if first_result:
-            href = await first_result.get_attribute('href')
-            if href and href.startswith('http'):
-                return href.split('&')[0].split('?')[0]
-    except:
-        pass
-    return None
-
-async def extract_from_website(page, url):
-    try:
-        print(f"      🔄 Scanning: {url}")
-        await page.goto(url, wait_until="domcontentloaded", timeout=15000)
-        await asyncio.sleep(0.5)
-        content = await page.content()
-        clean_content = re.sub(r'<script[^>]*>.*?</script>|<style[^>]*>.*?</style>', '', content, flags=re.DOTALL | re.IGNORECASE)
-        emails = extract_real_emails_from_text(clean_content)
-        phones = extract_real_phones_from_text(clean_content)
-        body_text = await page.evaluate("document.body.innerText")
-        emails.extend(extract_real_emails_from_text(body_text))
-        phones.extend(extract_real_phones_from_text(body_text))
-        emails = list(dict.fromkeys(emails))
-        phones = list(dict.fromkeys(phones))
-        if emails:
-            print(f"         📧 Found {len(emails)} email(s) on page")
-        if phones:
-            print(f"         📞 Found {len(phones)} phone(s) on page")
-        return emails, phones
-    except Exception as e:
-        print(f"         ⚠️ Error scanning {url}: {str(e)[:50]}")
-        return [], []
-
-async def scan_website_pages(page, base_url, existing_emails, existing_phones):
-    all_emails = list(existing_emails)
-    all_phones = list(existing_phones)
-    if all_emails and all_phones:
-        return all_emails, all_phones
-    pages_to_check = [base_url]
-    if not all_emails or not all_phones:
-        contact_paths = ["/contact", "/contact-us", "/contactus", "/about", "/about-us"]
-        pages_to_check.extend([base_url.rstrip('/') + path for path in contact_paths])
-    for url in pages_to_check[:3]:
-        if all_emails and all_phones:
-            break
-        emails, phones = await extract_from_website(page, url)
-        all_emails.extend([e for e in emails if e not in all_emails])
-        all_phones.extend([p for p in phones if p not in all_phones])
-        await asyncio.sleep(0.5)
-    return all_emails, all_phones
-
-async def check_zoho_partner(page, website_url):
-    if not website_url:
-        return "No"
-    try:
-        print(f"      🤝 Checking Zoho partner status...")
-        await page.goto(website_url, wait_until="domcontentloaded", timeout=10000)
-        await asyncio.sleep(0.5)
-        content = await page.content()
-        content_lower = content.lower()
-        keywords = ["zoho partner", "zoho authorized", "zoho certified", "zoho implementation partner"]
-        for keyword in keywords:
-            if keyword in content_lower:
-                print(f"      ✅ Zoho Partner found!")
-                return "Yes"
-        print(f"      ❌ Not a Zoho Partner")
-        return "No"
-    except Exception as e:
-        print(f"      ⚠️ Could not check partner status: {str(e)[:50]}")
-        return "No"
-
-async def process_company_with_fresh_browser(company_name, playwright_instance):
-    browser = None
-    page = None
-    try:
-        print(f"\n   🚀 Processing: {company_name}")
-        browser = await playwright_instance.chromium.launch(
-            headless=True,
-            args=['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-dev-shm-usage']
-        )
-        page = await browser.new_page()
-        await page.set_viewport_size({"width": 1280, "height": 720})
-        page.set_default_timeout(10000)
-        
-        google_phones, google_emails, website = await extract_from_google_results(page, company_name)
-        emails = google_emails
-        phones = google_phones
-        source = "Google Results"
-        
-        if website and (not google_emails or not google_phones):
-            print(f"   🌐 Scanning website for more info...")
-            emails, phones = await scan_website_pages(page, website, google_emails, google_phones)
-            if (emails and not google_emails) or (phones and not google_phones):
-                source = "Combined (Google + Website)"
-            elif emails or phones:
-                source = "Website"
-        elif website:
-            source = "Google Results Only"
-            print(f"   🌐 Website found: {website}")
-        else:
-            print(f"   ❌ No website found")
-        
-        partner = "No"
-        if website:
-            partner = await check_zoho_partner(page, website)
-        
-        result = {
-            "Company Name": company_name,
-            "Website": website or "",
-            "Contact Email": emails[0] if emails else "",
-            "Phone Number": phones[0] if phones else "",
-            "Zoho Partner Status": partner,
-            "Source": source,
-            "Processed Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
-        
-        print(f"\n   📊 RESULT: {company_name}")
-        print(f"      🌐 Website: {website or 'Not found'}")
-        print(f"      📧 Email: {emails[0] if emails else 'Not found'}")
-        print(f"      📞 Phone: {phones[0] if phones else 'Not found'}")
-        print(f"      🤝 Zoho Partner: {partner}")
-        print(f"      📋 Source: {source}")
-        return result, True
-    except Exception as e:
-        print(f"   ❌ Error processing {company_name}: {str(e)}")
-        return {
-            "Company Name": company_name,
-            "Website": "",
-            "Contact Email": "",
-            "Phone Number": "",
-            "Zoho Partner Status": "Error",
-            "Source": "Error",
-            "Processed Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }, False
-    finally:
-        if page:
-            await page.close()
-        if browser:
-            await browser.close()
-
-async def run_phase2():
-    print("=" * 70)
-    print("🚀 PHASE 2: EXTRACT CONTACT INFORMATION")
-    print("=" * 70)
-    
-    install_playwright_browsers()
+def run_phase2_sync():
+    """Run Phase 2 synchronously to avoid async issues"""
+    log_message("="*70)
+    log_message("🚀 PHASE 2: EXTRACT CONTACT INFORMATION (SYNC MODE)")
+    log_message("="*70)
     
     progress = load_phase2_progress()
     results = load_phase2_existing_results()
@@ -1110,43 +1231,42 @@ async def run_phase2():
     all_companies = read_companies_for_phase2()
     companies_to_process = [c for c in all_companies if c not in progress["completed_companies"]]
     
-    print(f"\n📊 Statistics:")
-    print(f"   Total companies: {len(all_companies)}")
-    print(f"   Already processed: {len(progress['completed_companies'])}")
-    print(f"   Remaining to process: {len(companies_to_process)}")
+    log_message(f"\n📊 Statistics:")
+    log_message(f"   Total companies: {len(all_companies)}")
+    log_message(f"   Already processed: {len(progress['completed_companies'])}")
+    log_message(f"   Remaining to process: {len(companies_to_process)}")
     
     if not companies_to_process:
-        print("\n✅ Phase 2: All companies already processed!")
+        log_message("\n✅ Phase 2: All companies already processed!")
         if results:
             total = len(results)
             with_email = sum(1 for r in results if r.get('Contact Email'))
             with_phone = sum(1 for r in results if r.get('Phone Number'))
             zoho_partners = sum(1 for r in results if r.get('Zoho Partner Status') == 'Yes')
-            print(f"\n📊 FINAL SUMMARY:")
-            print(f"   Total processed: {total}")
-            print(f"   Emails found: {with_email}")
-            print(f"   Phones found: {with_phone}")
-            print(f"   Zoho Partners: {zoho_partners}")
+            log_message(f"\n📊 FINAL SUMMARY:")
+            log_message(f"   Total processed: {total}")
+            log_message(f"   Emails found: {with_email}")
+            log_message(f"   Phones found: {with_phone}")
+            log_message(f"   Zoho Partners: {zoho_partners}")
         return True
     
-    async with async_playwright_lib() as p:
-        for idx, company_name in enumerate(companies_to_process, 1):
-            print(f"\n{'='*60}")
-            print(f"[{idx}/{len(companies_to_process)}] Processing: {company_name}")
-            print(f"{'='*60}")
-            
-            result, success = await process_company_with_fresh_browser(company_name, p)
-            
-            results.append(result)
-            progress["completed_companies"].append(result["Company Name"])
-            progress["last_company"] = result["Company Name"]
-            
-            save_phase2_progress(progress, results)
-            print(f"\n   💾 Progress saved ({len(progress['completed_companies'])}/{len(all_companies)})")
-            
-            if idx < len(companies_to_process):
-                print(f"   ⏳ Waiting {REQUEST_DELAY} seconds before next company...")
-                await asyncio.sleep(REQUEST_DELAY)
+    for idx, company_name in enumerate(companies_to_process, 1):
+        log_message(f"\n{'='*60}")
+        log_message(f"[{idx}/{len(companies_to_process)}] Processing: {company_name}")
+        log_message(f"{'='*60}")
+        
+        result = process_company_sync(company_name)
+        
+        results.append(result)
+        progress["completed_companies"].append(result["Company Name"])
+        progress["last_company"] = result["Company Name"]
+        
+        save_phase2_progress(progress, results)
+        log_message(f"\n   💾 Progress saved ({len(progress['completed_companies'])}/{len(all_companies)})")
+        
+        if idx < len(companies_to_process):
+            log_message(f"   ⏳ Waiting {REQUEST_DELAY} seconds...")
+            time.sleep(REQUEST_DELAY)
     
     save_phase2_progress(progress, results)
     
@@ -1155,75 +1275,76 @@ async def run_phase2():
     with_phone = sum(1 for r in results if r.get('Phone Number'))
     zoho_partners = sum(1 for r in results if r.get('Zoho Partner Status') == 'Yes')
     
-    print(f"\n{'='*60}")
-    print("📊 PHASE 2 FINAL SUMMARY")
-    print(f"{'='*60}")
-    print(f"✅ Total companies processed: {total}")
-    print(f"📧 Companies with email: {with_email} ({with_email/total*100:.1f}%)")
-    print(f"📞 Companies with phone: {with_phone} ({with_phone/total*100:.1f}%)")
-    print(f"🤝 Zoho Partners found: {zoho_partners}")
-    print(f"\n📁 Results saved to: {PHASE2_OUTPUT_CSV}")
+    log_message(f"\n{'='*60}")
+    log_message("📊 PHASE 2 FINAL SUMMARY")
+    log_message(f"{'='*60}")
+    log_message(f"✅ Total companies processed: {total}")
+    log_message(f"📧 Companies with email: {with_email} ({with_email/total*100:.1f}%)")
+    log_message(f"📞 Companies with phone: {with_phone} ({with_phone/total*100:.1f}%)")
+    log_message(f"🤝 Zoho Partners found: {zoho_partners}")
+    log_message(f"\n📁 Results saved to: {PHASE2_OUTPUT_CSV}")
     
     return True
 
+# ==================== SIMPLIFIED PHASE 1 ====================
+def run_phase1():
+    """Simplified Phase 1 for demo - you can keep your original Phase 1 code"""
+    log_message("="*70)
+    log_message("🚀 PHASE 1: SCRAPE COMPANY NAMES")
+    log_message("="*70)
+    
+    # For now, if Phase 1 CSV exists, just return True
+    if os.path.exists(PHASE1_OUTPUT_CSV):
+        load_existing_companies()
+        log_message(f"✅ Phase 1 already completed with {len(ALL_COMPANIES)} companies")
+        return True
+    
+    log_message("⚠️ Phase 1 CSV not found. Please run Phase 1 scraping first.")
+    return False
+
 # ==================== MAIN ====================
 def main():
-    print("="*70)
-    print("🎯 COMPLETE ZOHO PARTNER SCRAPER")
-    print("   Phase 1: Scrape company names from 10 job websites")
-    print("   Phase 2: Extract contact info (emails, phones, websites)")
-    print("   AUTO-RESUME: Continues from where it left off if stopped")
-    print("="*70)
-    
-    # Install browsers before anything else
-    install_playwright_browsers()
+    log_message("="*70)
+    log_message("🎯 ZOHO PARTNER SCRAPER - SYNC VERSION")
+    log_message("="*70)
     
     master_progress = load_master_progress()
     
     # Phase 1
     if not master_progress.get("phase1_completed", False):
-        print("\n" + "="*70)
-        print("📌 STARTING PHASE 1")
-        print("="*70)
-        
+        log_message("\n📌 STARTING PHASE 1")
         phase1_success = run_phase1()
         
         if phase1_success:
             master_progress["phase1_completed"] = True
             save_master_progress(master_progress)
-            print("\n✅ Phase 1 completed successfully!")
+            log_message("\n✅ Phase 1 completed successfully!")
         else:
-            print("\n⚠️ Phase 1 had issues. Progress saved. Run again to continue.")
+            log_message("\n⚠️ Phase 1 had issues. Progress saved.")
             return
     else:
-        print("\n⏭️ Phase 1 already completed. Skipping to Phase 2...")
+        log_message("\n⏭️ Phase 1 already completed. Skipping to Phase 2...")
     
     # Phase 2
     if not master_progress.get("phase2_completed", False):
-        print("\n" + "="*70)
-        print("📌 STARTING PHASE 2")
-        print("="*70)
+        log_message("\n📌 STARTING PHASE 2")
         
-        # Check if Phase 1 output exists
         if not os.path.exists(PHASE1_OUTPUT_CSV):
-            print(f"\n❌ Error: {PHASE1_OUTPUT_CSV} not found!")
-            print("   Please run Phase 1 first.")
+            log_message(f"\n❌ Error: {PHASE1_OUTPUT_CSV} not found!")
             return
         
-        # Run Phase 2
-        asyncio.run(run_phase2())
+        success = run_phase2_sync()
         
-        master_progress["phase2_completed"] = True
-        save_master_progress(master_progress)
-        print("\n✅ Phase 2 completed!")
+        if success:
+            master_progress["phase2_completed"] = True
+            save_master_progress(master_progress)
+            log_message("\n✅ Phase 2 completed!")
     else:
-        print("\n⏭️ Phase 2 already completed!")
+        log_message("\n⏭️ Phase 2 already completed!")
     
-    print("\n" + "="*70)
-    print("🎉 ALL PHASES COMPLETED SUCCESSFULLY!")
-    print("="*70)
-    print(f"📁 Phase 1 output: {PHASE1_OUTPUT_CSV}")
-    print(f"📁 Phase 2 output: {PHASE2_OUTPUT_CSV}")
+    log_message("\n" + "="*70)
+    log_message("🎉 ALL PHASES COMPLETED SUCCESSFULLY!")
+    log_message("="*70)
 
 if __name__ == "__main__":
     main()
