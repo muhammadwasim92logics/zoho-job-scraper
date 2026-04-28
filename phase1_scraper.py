@@ -5,6 +5,24 @@ PHASE 1: SCRAPE COMPANY NAMES FROM JOB WEBSITES
 - Resume capable
 - ALL XPATHS AND WAIT TIMES PRESERVED
 """
+#!/usr/bin/env python3
+"""
+PHASE 1: SCRAPE COMPANY NAMES FROM JOB WEBSITES
+"""
+
+import sys
+import os
+
+# FORCE sync mode - prevent asyncio detection
+os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '0'
+os.environ['PYTHONUNBUFFERED'] = '1'
+
+# Rest of your imports...
+import csv
+import time
+import json
+from playwright.sync_api import sync_playwright
+from bs4 import BeautifulSoup
 
 import csv
 import time
