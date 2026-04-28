@@ -1,61 +1,8 @@
-name: Zoho Job Scraper
+- name: Install Playwright browsers
+  run: |
+    pip install playwright
+    playwright install chromium
+    playwright install-deps  # This installs system dependencies
 
-on:
-  schedule:
-    - cron: '0 */6 * * *'
-  workflow_dispatch:
-
-jobs:
-  scrape:
-    runs-on: ubuntu-latest
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-    
-    - name: Install dependencies
-      run: |
-        pip install --upgrade pip
-        pip install playwright beautifulsoup4 lxml
-        playwright install chromium
-        playwright install-deps
-    
-    - name: Verify Playwright installation
-      run: |
-        python -c "from playwright.sync_api import sync_playwright; print('Playwright OK')"
-    
-    - name: Run Phase 1 - Scrape Company Names
-      run: |
-        echo "========================================="
-        echo "🚀 STARTING PHASE 1"
-        echo "========================================="
-        python phase1_scraper.py
-      shell: bash
-    
-    - name: Check Phase 1 Output
-      run: |
-        echo "Phase 1 Output:"
-        cat All_Zoho_Companies_With_Source.csv 2>/dev/null | head -20 || echo "No output yet"
-    
-    - name: Run Phase 2 - Extract Contact Info
-      run: |
-        echo "========================================="
-        echo "🚀 STARTING PHASE 2"
-        echo "========================================="
-        python phase2_contacts.py
-      shell: bash
-    
-    - name: Upload results
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: zoho-companies-data
-        path: |
-          *.csv
-          *.json
-        retention-days: 30
+- name: Run scraper
+  run: python script.py
