@@ -112,11 +112,11 @@ def setup_playwright():
     browser = playwright.chromium.launch(
         headless=True,
         args=[
-            "--incognito",
+            "--no-sandbox",  # Required for GitHub Actions
+            "--disable-setuid-sandbox",  # Required for GitHub Actions
+            "--disable-dev-shm-usage",  # Required for GitHub Actions
             "--disable-blink-features=AutomationControlled",
             "--start-maximized",
-            "--no-sandbox",
-            "--disable-dev-shm-usage",
             f"--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         ]
     )
