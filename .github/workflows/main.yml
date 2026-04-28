@@ -1,8 +1,103 @@
-- name: Install Playwright browsers
-  run: |
-    pip install playwright
-    playwright install chromium
-    playwright install-deps  # This installs system dependencies
+name: Zoho Partner Scraper
 
-- name: Run scraper
-  run: python script.py
+on:
+  schedule:
+    # Runs every 6 hours
+    - cron: '0 */6 * * *'
+  workflow_dispatch:  # Allows manual trigger from GitHub UI
+  push:
+    branches: [ main ]
+    paths:
+      - 'script.py'
+      - 'requirements.txt'
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        pip install --upgrade pip
+        pip install playwright beautifulsoup4
+    
+    - name: Install Playwright browsers
+      run: |
+        playwright install chromium
+        playwright install-deps
+    
+    - name: Verify installation
+      run: |
+        python --version
+        pip list | grep playwright
+        pip list | grep beautifulsoup4
+    
+    - name: Run scraper
+      run: python script.py
+      continue-on-error: false
+    
+    - name: Display results summary
+      run: |
+        echo "========================================="
+        echo "SCRAPING RESULTS SUMMARY"
+        echo "========================================="
+        
+        if [ -f "All_Zoho_Companies_With_Source.csv" ]; then
+          echo ""
+          echo "📊 Phase 1 Results:"
+          echo "   Total companies: $(($(wc -l < All_Zoho_Companies_With_Source.csv) - 1))"
+          echo ""
+          echo "   Sample companies (first 10):"
+          head -n 11 All_Zoho_Companies_With_Source.csv
+        fi
+        
+        if [ -f "companies_contacts_fixed.csv" ]; then
+          echo ""
+          echo "📊 Phase 2 Results:"
+          echo "   Total processed: $(($(wc -l < companies_contacts_fixed.csv) - 1))"
+          
+          # Calculate statistics
+          TOTAL=$(($(wc -l < companies_contacts_fixed.csv) - 1))
+          WITH_EMAIL=$(tail -n +2 companies_contacts_fixed.csv | cut -d',' -f3 | grep -v '^""$' | grep -v '^$' | wc -l)
+          WITH_PHONE=$(tail -n +2 companies_contacts_fixed.csv | cut -d',' -f4 | grep -v '^""$' | grep -v '^$' | wc -l)
+          ZOHO_PARTNERS=$(tail -n +2 companies_contacts_fixed.csv | cut -d',' -f5 | grep -i '"Yes"' | wc -l)
+          
+          echo "   Companies with email: $WITH_EMAIL"
+          echo "   Companies with phone: $WITH_PHONE"
+          echo "   Zoho Partners found: $ZOHO_PARTNERS"
+          echo ""
+          echo "   Sample contacts (first 5):"
+          head -n 6 companies_contacts_fixed.csv | column -t -s,
+        fi
+    
+    - name: Upload results as artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: scraper-results-$(date +'%Y%m%d-%H%M%S')
+        path: |
+          All_Zoho_Companies_With_Source.csv
+          companies_contacts_fixed.csv
+          phase1_progress.json
+          phase2_progress.json
+          master_progress.json
+        retention-days: 30
+        if-no-files-found: warn
+    
+    - name: Upload logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: scraper-logs-failed
+        path: |
+          *.csv
+          *.json
+          *.log
+        retention-days: 7
