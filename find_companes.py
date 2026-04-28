@@ -123,7 +123,7 @@ def save_company_immediate(source_url, company_name):
 def setup_playwright():
     playwright = sync_playwright().start()
     browser = playwright.chromium.launch(
-        headless=False,
+        headless=True,
         args=[
             "--incognito",
             "--disable-blink-features=AutomationControlled",
@@ -946,7 +946,7 @@ async def process_company_with_fresh_browser(company_name, playwright_instance):
     try:
         print(f"\n   🚀 Processing: {company_name}")
         browser = await playwright_instance.chromium.launch(
-            headless=False,
+            headless=True,
             args=['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-dev-shm-usage']
         )
         page = await browser.new_page()
