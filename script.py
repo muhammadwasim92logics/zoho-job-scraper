@@ -3,7 +3,6 @@ COMPLETE ZOHO PARTNER SCRAPER - PHASE 1 & 2
 - Phase 1: Scrape company names from 10 job websites
 - Phase 2: Extract contact info (emails, phones, websites) for each company
 - AUTO-RESUME: If stopped anywhere, continues from where it left off
-- No XPaths or structure changed
 """
 
 import csv
@@ -19,27 +18,7 @@ from playwright.sync_api import sync_playwright
 from playwright.async_api import async_playwright as async_playwright_lib
 from bs4 import BeautifulSoup
 
-# Install browsers if not present
-def install_playwright_browsers():
-    """Install Playwright browsers if not already installed"""
-    try:
-        # Check if browsers are installed by trying to launch
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            browser.close()
-        print("✅ Playwright browsers are already installed.")
-        return True
-    except Exception as e:
-        if "Executable doesn't exist" in str(e):
-            print("📦 Installing Playwright browsers...")
-            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-            print("✅ Playwright browsers installed successfully.")
-            return True
-        else:
-            print(f"⚠️ Unexpected error: {e}")
-            return False
-
+# Disable playwright browser path restriction
 os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '0'
 
 # ==================== PHASE 1 CONFIGURATION ====================
@@ -56,6 +35,31 @@ REQUEST_DELAY = 1
 # ==================== MASTER PROGRESS TRACKING ====================
 MASTER_PROGRESS_FILE = "master_progress.json"
 
+def install_playwright_browsers():
+    """Install Playwright browsers if not already installed"""
+    print("\n🔧 Checking Playwright browser installation...")
+    try:
+        # Check if browsers are installed by trying to launch
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            browser.close()
+        print("✅ Playwright browsers are already installed.")
+        return True
+    except Exception as e:
+        if "Executable doesn't exist" in str(e):
+            print("📦 Installing Playwright browsers...")
+            result = subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], 
+                                  capture_output=True, text=True)
+            print(result.stdout)
+            if result.stderr:
+                print(result.stderr)
+            print("✅ Playwright browsers installed successfully.")
+            return True
+        else:
+            print(f"⚠️ Unexpected error: {e}")
+            return False
+
 def load_master_progress():
     """Load which phase was completed"""
     if os.path.exists(MASTER_PROGRESS_FILE):
@@ -71,6 +75,7 @@ def save_master_progress(progress):
     try:
         with open(MASTER_PROGRESS_FILE, 'w', encoding='utf-8') as f:
             json.dump(progress, f, indent=2)
+        print(f"💾 Master progress saved: Phase1={progress['phase1_completed']}, Phase2={progress['phase2_completed']}")
     except:
         pass
 
@@ -142,6 +147,7 @@ def save_company_immediate(source_url, company_name):
         with open(PHASE1_OUTPUT_CSV, 'a', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerow([source_url, company_name])
+        print(f"      💾 Saved: {company_name}")
         return True
     return False
 
@@ -150,7 +156,7 @@ def setup_playwright():
     browser = playwright.chromium.launch(
         headless=True,
         args=[
-            "--no-sandbox",  # Required for some environments
+            "--no-sandbox",
             "--disable-setuid-sandbox",
             "--incognito",
             "--disable-blink-features=AutomationControlled",
@@ -158,13 +164,12 @@ def setup_playwright():
         ]
     )
     context = browser.new_context(
-        viewport={'width': 1920, 'height': 1080'},
+        viewport={'width': 1920, 'height': 1080},
         user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     )
     page = context.new_page()
     return playwright, browser, page
 
-# Phase 1 Scrapers
 def scrape_blackboardjob():
     print("\n" + "="*70)
     print("🌐 WEBSITE 1: blackboardjob.com")
@@ -190,12 +195,14 @@ def scrape_blackboardjob():
                 
                 company_elements = page.query_selector_all(".item__company")
                 if not company_elements:
+                    print(f"      No companies found on page {current_page}")
                     break
                 
                 current_page_companies = [elem.inner_text().strip() for elem in company_elements if elem.inner_text().strip()]
                 current_companies_set = set(current_page_companies)
                 
                 if current_companies_set == previous_companies_set and current_page > 1:
+                    print(f"      No new companies - stopping pagination")
                     break
                 
                 new_in_this_page = 0
@@ -206,7 +213,7 @@ def scrape_blackboardjob():
                             total_new += 1
                             new_in_this_page += 1
                 
-                print(f"      Found {len(company_elements)} companies, {new_in_this_page} new")
+                print(f"      ✅ Found {len(company_elements)} companies, {new_in_this_page} new (Total: {total_new})")
                 previous_companies_set = current_companies_set
                 
                 if len(company_elements) < 10:
@@ -218,6 +225,7 @@ def scrape_blackboardjob():
         playwright.stop()
     
     WEBSITE_STATS.append({"source": "Blackboardjob", "new": total_new, "total": len(ALL_COMPANIES)})
+    print(f"\n   📊 Blackboardjob Summary: {total_new} new companies found")
     return total_new
 
 def scrape_talent():
@@ -238,6 +246,7 @@ def scrape_talent():
             
             while True:
                 url = f"https://ae.talent.com/jobs?k={keyword}&l=United+Arab+Emirates&p={page_num}"
+                print(f"\n   📄 Page {page_num}: {url}")
                 page.goto(url)
                 time.sleep(3)
                 
@@ -246,12 +255,14 @@ def scrape_talent():
                 company_elements = soup.select("span.JobCard_company__NmRol")
                 
                 if not company_elements:
+                    print(f"      No companies found on page {page_num}")
                     break
                 
                 current_page_companies = [c.get_text(strip=True) for c in company_elements if c.get_text(strip=True)]
                 current_companies_set = set(current_page_companies)
                 
                 if current_companies_set == previous_companies_set and page_num > 1:
+                    print(f"      No new companies - stopping pagination")
                     break
                 
                 new_in_this_page = 0
@@ -262,7 +273,7 @@ def scrape_talent():
                             total_new += 1
                             new_in_this_page += 1
                 
-                print(f"      Page {page_num}: Found {len(company_elements)} companies, {new_in_this_page} new")
+                print(f"      ✅ Found {len(company_elements)} companies, {new_in_this_page} new (Total: {total_new})")
                 previous_companies_set = current_companies_set
                 page_num += 1
                 time.sleep(1)
@@ -271,6 +282,7 @@ def scrape_talent():
         playwright.stop()
     
     WEBSITE_STATS.append({"source": "Talent.com", "new": total_new, "total": len(ALL_COMPANIES)})
+    print(f"\n   📊 Talent.com Summary: {total_new} new companies found")
     return total_new
 
 def scrape_gulftalent():
@@ -290,6 +302,7 @@ def scrape_gulftalent():
             
             for page_num in range(1, 6):
                 url = f"https://www.gulftalent.com/mobile/uae/jobs/{page_num}?keyword={keyword}"
+                print(f"\n   📄 Page {page_num}: {url}")
                 page.goto(url)
                 time.sleep(3)
                 
@@ -302,12 +315,14 @@ def scrape_gulftalent():
                         secondary = []
                     
                     if not secondary:
+                        print(f"      No companies found on page {page_num}")
                         break
                     
                     current_page_companies = [row.inner_text().strip() for row in secondary if row.inner_text().strip()]
                     current_companies_set = set(current_page_companies)
                     
                     if current_companies_set == previous_companies_set and page_num > 1:
+                        print(f"      No new companies - stopping pagination")
                         break
                     
                     new_in_this_page = 0
@@ -318,7 +333,7 @@ def scrape_gulftalent():
                                 total_new += 1
                                 new_in_this_page += 1
                     
-                    print(f"      Page {page_num}: Found {len(secondary)} companies, {new_in_this_page} new")
+                    print(f"      ✅ Found {len(secondary)} companies, {new_in_this_page} new (Total: {total_new})")
                     previous_companies_set = current_companies_set
                 except Exception as e:
                     print(f"      Page {page_num}: Error - {str(e)[:50]}")
@@ -328,6 +343,7 @@ def scrape_gulftalent():
         playwright.stop()
     
     WEBSITE_STATS.append({"source": "GulfTalent", "new": total_new, "total": len(ALL_COMPANIES)})
+    print(f"\n   📊 GulfTalent Summary: {total_new} new companies found")
     return total_new
 
 def scrape_timesjobs():
@@ -346,18 +362,18 @@ def scrape_timesjobs():
             previous_companies_set = set()
             
             url = f"https://www.timesjobs.com/job-search?keywords={keyword}&refreshed=true"
+            print(f"\n   📄 Loading page: {url}")
             page.goto(url)
             time.sleep(3)
             
             for page_num in range(1, 50):
-                print(f"      Page {page_num}")
+                print(f"\n   📄 Page {page_num}")
                 try:
-                        # wait up to 10 seconds for elements to load
-                        page.wait_for_selector('//span[@class="w-[60px] md:w-auto inline-block whitespace-nowrap overflow-hidden text-ellipsis"]', timeout=10000)
-
-                        main = page.query_selector_all('//span[@class="w-[60px] md:w-auto inline-block whitespace-nowrap overflow-hidden text-ellipsis"]')
+                    page.wait_for_selector('//span[@class="w-[60px] md:w-auto inline-block whitespace-nowrap overflow-hidden text-ellipsis"]', timeout=10000)
+                    main = page.query_selector_all('//span[@class="w-[60px] md:w-auto inline-block whitespace-nowrap overflow-hidden text-ellipsis"]')
                 except:
-                        break
+                    print(f"      No more pages found")
+                    break
                 
                 if not main:
                     break
@@ -366,6 +382,7 @@ def scrape_timesjobs():
                 current_companies_set = set(current_page_companies)
                 
                 if current_companies_set == previous_companies_set and page_num > 1:
+                    print(f"      No new companies - stopping pagination")
                     break
                 
                 new_in_this_page = 0
@@ -376,7 +393,7 @@ def scrape_timesjobs():
                             total_new += 1
                             new_in_this_page += 1
                 
-                print(f"         Found {len(main)} companies, {new_in_this_page} new")
+                print(f"      ✅ Found {len(main)} companies, {new_in_this_page} new (Total: {total_new})")
                 previous_companies_set = current_companies_set
                 
                 try:
@@ -395,6 +412,7 @@ def scrape_timesjobs():
         playwright.stop()
     
     WEBSITE_STATS.append({"source": "TimesJobs", "new": total_new, "total": len(ALL_COMPANIES)})
+    print(f"\n   📊 TimesJobs Summary: {total_new} new companies found")
     return total_new
 
 def scrape_jooble():
@@ -414,15 +432,15 @@ def scrape_jooble():
             
             for page_num in range(1, 30):
                 url = f"https://ae.jooble.org/jobs-{keyword}?p={page_num}"
+                print(f"\n   📄 Page {page_num}: {url}")
                 page.goto(url)
                 time.sleep(5)
                 
                 try:
-                    # wait for elements to appear (max 10s)
                     page.wait_for_selector('//p[@data-test-name="_companyName"]', timeout=10000)
-
                     company_names = page.query_selector_all('//p[@data-test-name="_companyName"]')
                 except:
+                    print(f"      No companies found on page {page_num}")
                     break
                 
                 if not company_names:
@@ -432,6 +450,7 @@ def scrape_jooble():
                 current_companies_set = set(current_page_companies)
                 
                 if current_companies_set == previous_companies_set and page_num > 1:
+                    print(f"      No new companies - stopping pagination")
                     break
                 
                 new_in_this_page = 0
@@ -442,7 +461,7 @@ def scrape_jooble():
                             total_new += 1
                             new_in_this_page += 1
                 
-                print(f"      Page {page_num}: Found {len(company_names)} companies, {new_in_this_page} new")
+                print(f"      ✅ Found {len(company_names)} companies, {new_in_this_page} new (Total: {total_new})")
                 previous_companies_set = current_companies_set
                 time.sleep(1)
     finally:
@@ -450,6 +469,7 @@ def scrape_jooble():
         playwright.stop()
     
     WEBSITE_STATS.append({"source": "Jooble", "new": total_new, "total": len(ALL_COMPANIES)})
+    print(f"\n   📊 Jooble Summary: {total_new} new companies found")
     return total_new
 
 def scrape_adzuna():
@@ -469,15 +489,15 @@ def scrape_adzuna():
             
             for page_num in range(1, 30):
                 url = f"https://www.adzuna.com/search?loc=151946&q={keyword}&page={page_num}"
+                print(f"\n   📄 Page {page_num}: {url}")
                 page.goto(url)
                 time.sleep(3)
                 
                 try:
-                    # wait up to 10 seconds for elements to appear
                     page.wait_for_selector('//div[@class="ui-company"]', timeout=10000)
-
                     company_names = page.query_selector_all('//div[@class="ui-company"]')
                 except:
+                    print(f"      No companies found on page {page_num}")
                     break
                 
                 if not company_names:
@@ -487,6 +507,7 @@ def scrape_adzuna():
                 current_companies_set = set(current_page_companies)
                 
                 if current_companies_set == previous_companies_set and page_num > 1:
+                    print(f"      No new companies - stopping pagination")
                     break
                 
                 new_in_this_page = 0
@@ -497,7 +518,7 @@ def scrape_adzuna():
                             total_new += 1
                             new_in_this_page += 1
                 
-                print(f"      Page {page_num}: Found {len(company_names)} companies, {new_in_this_page} new")
+                print(f"      ✅ Found {len(company_names)} companies, {new_in_this_page} new (Total: {total_new})")
                 previous_companies_set = current_companies_set
                 time.sleep(1)
     finally:
@@ -505,6 +526,7 @@ def scrape_adzuna():
         playwright.stop()
     
     WEBSITE_STATS.append({"source": "Adzuna", "new": total_new, "total": len(ALL_COMPANIES)})
+    print(f"\n   📊 Adzuna Summary: {total_new} new companies found")
     return total_new
 
 def scrape_linkedin():
@@ -522,6 +544,7 @@ def scrape_linkedin():
             companies = []
             
             url = f"https://www.linkedin.com/jobs/search/?keywords={keyword}&geoId=92000000"
+            print(f"\n   📄 Loading page: {url}")
             page.goto(url)
             time.sleep(5)
             
@@ -558,9 +581,10 @@ def scrape_linkedin():
                             total_new += 1
                             new_in_this_scroll += 1
                 
-                print(f"         Scroll {scrolls}: Found {len(elements)} companies, {new_in_this_scroll} new")
+                print(f"         Scroll {scrolls}: Found {len(elements)} companies, {new_in_this_scroll} new (Total: {total_new})")
                 
                 if len(companies) == prev_company_count:
+                    print(f"      No new companies found - stopping scroll")
                     break
                 
                 prev_company_count = len(companies)
@@ -574,6 +598,7 @@ def scrape_linkedin():
         playwright.stop()
     
     WEBSITE_STATS.append({"source": "LinkedIn", "new": total_new, "total": len(ALL_COMPANIES)})
+    print(f"\n   📊 LinkedIn Summary: {total_new} new companies found")
     return total_new
 
 def scrape_dice():
@@ -591,6 +616,7 @@ def scrape_dice():
             companies = []
             
             url = f"https://www.dice.com/jobs?q={keyword}"
+            print(f"\n   📄 Loading page: {url}")
             page.goto(url)
             time.sleep(3)
             
@@ -616,9 +642,10 @@ def scrape_dice():
                             total_new += 1
                             new_in_this_scroll += 1
                 
-                print(f"         Scroll {scrolls}: Found {len(elements)} companies, {new_in_this_scroll} new")
+                print(f"         Scroll {scrolls}: Found {len(elements)} companies, {new_in_this_scroll} new (Total: {total_new})")
                 
                 if len(companies) == prev_company_count:
+                    print(f"      No new companies found - stopping scroll")
                     break
                 
                 prev_company_count = len(companies)
@@ -631,6 +658,7 @@ def scrape_dice():
         playwright.stop()
     
     WEBSITE_STATS.append({"source": "Dice", "new": total_new, "total": len(ALL_COMPANIES)})
+    print(f"\n   📊 Dice Summary: {total_new} new companies found")
     return total_new
 
 def scrape_careerjet():
@@ -650,15 +678,15 @@ def scrape_careerjet():
             
             for page_num in range(1, 30):
                 url = f"https://www.careerjet.com/jobs?s={keyword}&p={page_num}"
+                print(f"\n   📄 Page {page_num}: {url}")
                 page.goto(url)
                 time.sleep(6)
                 
                 try:
-                    # wait up to 10 seconds
                     page.wait_for_selector('//p[@class="company"]', timeout=10000)
-
                     company_names = page.query_selector_all('//p[@class="company"]')
                 except:
+                    print(f"      No companies found on page {page_num}")
                     break
                 
                 if not company_names:
@@ -668,6 +696,7 @@ def scrape_careerjet():
                 current_companies_set = set(current_page_companies)
                 
                 if current_companies_set == previous_companies_set and page_num > 1:
+                    print(f"      No new companies - stopping pagination")
                     break
                 
                 new_in_this_page = 0
@@ -678,7 +707,7 @@ def scrape_careerjet():
                             total_new += 1
                             new_in_this_page += 1
                 
-                print(f"      Page {page_num}: Found {len(company_names)} companies, {new_in_this_page} new")
+                print(f"      ✅ Found {len(company_names)} companies, {new_in_this_page} new (Total: {total_new})")
                 previous_companies_set = current_companies_set
                 time.sleep(1)
     finally:
@@ -686,6 +715,7 @@ def scrape_careerjet():
         playwright.stop()
     
     WEBSITE_STATS.append({"source": "CareerJet", "new": total_new, "total": len(ALL_COMPANIES)})
+    print(f"\n   📊 CareerJet Summary: {total_new} new companies found")
     return total_new
 
 def scrape_cv_library():
@@ -703,6 +733,7 @@ def scrape_cv_library():
             companies = []
             
             url = f"https://www.cv-library.co.uk/{keyword}-jobs"
+            print(f"\n   📄 Loading page: {url}")
             page.goto(url)
             time.sleep(3)
             
@@ -728,9 +759,10 @@ def scrape_cv_library():
                             total_new += 1
                             new_in_this_scroll += 1
                 
-                print(f"         Scroll {scrolls}: Found {len(elements)} companies, {new_in_this_scroll} new")
+                print(f"         Scroll {scrolls}: Found {len(elements)} companies, {new_in_this_scroll} new (Total: {total_new})")
                 
                 if len(companies) == prev_company_count:
+                    print(f"      No new companies found - stopping scroll")
                     break
                 
                 prev_company_count = len(companies)
@@ -743,6 +775,7 @@ def scrape_cv_library():
         playwright.stop()
     
     WEBSITE_STATS.append({"source": "CV-Library", "new": total_new, "total": len(ALL_COMPANIES)})
+    print(f"\n   📊 CV-Library Summary: {total_new} new companies found")
     return total_new
 
 # ==================== PHASE 1 MAIN ====================
@@ -751,7 +784,6 @@ def run_phase1():
     print("🚀 PHASE 1: SCRAPE COMPANY NAMES FROM 10 WEBSITES")
     print("="*70)
     
-    # Install browsers first
     if not install_playwright_browsers():
         print("❌ Failed to install Playwright browsers. Please check your environment.")
         return False
@@ -782,10 +814,15 @@ def run_phase1():
         safe_phase1_scrape(scraper_func, name)
     
     print("\n" + "="*70)
-    print("📊 PHASE 1 SUMMARY")
+    print("📊 PHASE 1 FINAL SUMMARY")
     print("="*70)
-    print(f"Total unique companies found: {len(ALL_COMPANIES)}")
-    print(f"Results saved to: {PHASE1_OUTPUT_CSV}")
+    print(f"✅ Total unique companies found: {len(ALL_COMPANIES)}")
+    print(f"📁 Results saved to: {PHASE1_OUTPUT_CSV}")
+    
+    # Display breakdown by source
+    print("\n📈 Breakdown by source:")
+    for stat in WEBSITE_STATS:
+        print(f"   • {stat['source']}: {stat['new']} new companies")
     
     return len(ALL_COMPANIES) > 0
 
@@ -861,7 +898,9 @@ def read_companies_for_phase2():
             for row in reader:
                 if len(row) >= 2 and row[1].strip():
                     companies.append(row[1].strip())
-        return list(dict.fromkeys(companies))
+        companies = list(dict.fromkeys(companies))
+        print(f"📊 Loaded {len(companies)} unique companies from {PHASE2_INPUT_CSV}")
+        return companies
     except Exception as e:
         print(f"❌ Error reading CSV: {e}")
         return []
@@ -878,6 +917,7 @@ def load_phase2_existing_results():
 
 async def extract_from_google_results(page, company_name):
     search_url = f"https://www.google.com/search?q={company_name.replace(' ', '+')}"
+    print(f"      🔍 Searching Google for: {company_name}")
     for attempt in range(MAX_RETRIES):
         try:
             await page.goto(search_url, wait_until="domcontentloaded", timeout=15000)
@@ -894,7 +934,15 @@ async def extract_from_google_results(page, company_name):
             phones = list(dict.fromkeys(phones))
             emails = list(dict.fromkeys(emails))
             website = await extract_website_from_google(page, content)
-            return phones, emails, website        except:
+            if website:
+                print(f"      🌐 Found website: {website}")
+            if emails:
+                print(f"      📧 Found {len(emails)} email(s)")
+            if phones:
+                print(f"      📞 Found {len(phones)} phone(s)")
+            return phones, emails, website
+        except Exception as e:
+            print(f"      ⚠️ Attempt {attempt+1} failed: {str(e)[:50]}")
             if attempt == MAX_RETRIES - 1:
                 return [], [], None
             await asyncio.sleep(1)
@@ -921,6 +969,7 @@ async def extract_website_from_google(page, content):
 
 async def extract_from_website(page, url):
     try:
+        print(f"      🔄 Scanning: {url}")
         await page.goto(url, wait_until="domcontentloaded", timeout=15000)
         await asyncio.sleep(0.5)
         content = await page.content()
@@ -932,8 +981,13 @@ async def extract_from_website(page, url):
         phones.extend(extract_real_phones_from_text(body_text))
         emails = list(dict.fromkeys(emails))
         phones = list(dict.fromkeys(phones))
+        if emails:
+            print(f"         📧 Found {len(emails)} email(s) on page")
+        if phones:
+            print(f"         📞 Found {len(phones)} phone(s) on page")
         return emails, phones
-    except:
+    except Exception as e:
+        print(f"         ⚠️ Error scanning {url}: {str(e)[:50]}")
         return [], []
 
 async def scan_website_pages(page, base_url, existing_emails, existing_phones):
@@ -958,6 +1012,7 @@ async def check_zoho_partner(page, website_url):
     if not website_url:
         return "No"
     try:
+        print(f"      🤝 Checking Zoho partner status...")
         await page.goto(website_url, wait_until="domcontentloaded", timeout=10000)
         await asyncio.sleep(0.5)
         content = await page.content()
@@ -965,9 +1020,12 @@ async def check_zoho_partner(page, website_url):
         keywords = ["zoho partner", "zoho authorized", "zoho certified", "zoho implementation partner"]
         for keyword in keywords:
             if keyword in content_lower:
+                print(f"      ✅ Zoho Partner found!")
                 return "Yes"
+        print(f"      ❌ Not a Zoho Partner")
         return "No"
-    except:
+    except Exception as e:
+        print(f"      ⚠️ Could not check partner status: {str(e)[:50]}")
         return "No"
 
 async def process_company_with_fresh_browser(company_name, playwright_instance):
@@ -989,7 +1047,7 @@ async def process_company_with_fresh_browser(company_name, playwright_instance):
         source = "Google Results"
         
         if website and (not google_emails or not google_phones):
-            print(f"   🌐 Scanning website: {website}")
+            print(f"   🌐 Scanning website for more info...")
             emails, phones = await scan_website_pages(page, website, google_emails, google_phones)
             if (emails and not google_emails) or (phones and not google_phones):
                 source = "Combined (Google + Website)"
@@ -1003,7 +1061,6 @@ async def process_company_with_fresh_browser(company_name, playwright_instance):
         
         partner = "No"
         if website:
-            print(f"   🤝 Checking Zoho partner status...")
             partner = await check_zoho_partner(page, website)
         
         result = {
@@ -1017,13 +1074,14 @@ async def process_company_with_fresh_browser(company_name, playwright_instance):
         }
         
         print(f"\n   📊 RESULT: {company_name}")
-        if emails:
-            print(f"      📧 Email: {emails[0]}")
-        if phones:
-            print(f"      📞 Phone: {phones[0]}")
+        print(f"      🌐 Website: {website or 'Not found'}")
+        print(f"      📧 Email: {emails[0] if emails else 'Not found'}")
+        print(f"      📞 Phone: {phones[0] if phones else 'Not found'}")
+        print(f"      🤝 Zoho Partner: {partner}")
+        print(f"      📋 Source: {source}")
         return result, True
     except Exception as e:
-        print(f"   ❌ Error: {company_name} - {str(e)[:50]}")
+        print(f"   ❌ Error processing {company_name}: {str(e)}")
         return {
             "Company Name": company_name,
             "Website": "",
@@ -1044,7 +1102,6 @@ async def run_phase2():
     print("🚀 PHASE 2: EXTRACT CONTACT INFORMATION")
     print("=" * 70)
     
-    # Install browsers for async as well
     install_playwright_browsers()
     
     progress = load_phase2_progress()
@@ -1053,9 +1110,10 @@ async def run_phase2():
     all_companies = read_companies_for_phase2()
     companies_to_process = [c for c in all_companies if c not in progress["completed_companies"]]
     
-    print(f"📊 Total companies: {len(all_companies)}")
-    print(f"📊 Already processed: {len(progress['completed_companies'])}")
-    print(f"📊 Remaining to process: {len(companies_to_process)}")
+    print(f"\n📊 Statistics:")
+    print(f"   Total companies: {len(all_companies)}")
+    print(f"   Already processed: {len(progress['completed_companies'])}")
+    print(f"   Remaining to process: {len(companies_to_process)}")
     
     if not companies_to_process:
         print("\n✅ Phase 2: All companies already processed!")
@@ -1063,10 +1121,12 @@ async def run_phase2():
             total = len(results)
             with_email = sum(1 for r in results if r.get('Contact Email'))
             with_phone = sum(1 for r in results if r.get('Phone Number'))
+            zoho_partners = sum(1 for r in results if r.get('Zoho Partner Status') == 'Yes')
             print(f"\n📊 FINAL SUMMARY:")
             print(f"   Total processed: {total}")
             print(f"   Emails found: {with_email}")
             print(f"   Phones found: {with_phone}")
+            print(f"   Zoho Partners: {zoho_partners}")
         return True
     
     async with async_playwright_lib() as p:
@@ -1085,6 +1145,7 @@ async def run_phase2():
             print(f"\n   💾 Progress saved ({len(progress['completed_companies'])}/{len(all_companies)})")
             
             if idx < len(companies_to_process):
+                print(f"   ⏳ Waiting {REQUEST_DELAY} seconds before next company...")
                 await asyncio.sleep(REQUEST_DELAY)
     
     save_phase2_progress(progress, results)
@@ -1097,11 +1158,11 @@ async def run_phase2():
     print(f"\n{'='*60}")
     print("📊 PHASE 2 FINAL SUMMARY")
     print(f"{'='*60}")
-    print(f"Total companies processed: {total}")
-    print(f"Companies with email: {with_email}")
-    print(f"Companies with phone: {with_phone}")
-    print(f"Zoho Partners found: {zoho_partners}")
-    print(f"\n✅ Results saved to: {PHASE2_OUTPUT_CSV}")
+    print(f"✅ Total companies processed: {total}")
+    print(f"📧 Companies with email: {with_email} ({with_email/total*100:.1f}%)")
+    print(f"📞 Companies with phone: {with_phone} ({with_phone/total*100:.1f}%)")
+    print(f"🤝 Zoho Partners found: {zoho_partners}")
+    print(f"\n📁 Results saved to: {PHASE2_OUTPUT_CSV}")
     
     return True
 
