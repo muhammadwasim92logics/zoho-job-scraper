@@ -17,6 +17,7 @@ from playwright.sync_api import sync_playwright
 from playwright.async_api import async_playwright as async_playwright_lib
 from bs4 import BeautifulSoup
 
+os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '0'
 # ==================== PHASE 1 CONFIGURATION ====================
 PHASE1_OUTPUT_CSV = "All_Zoho_Companies_With_Source.csv"
 PHASE1_PROGRESS_FILE = "phase1_progress.json"
