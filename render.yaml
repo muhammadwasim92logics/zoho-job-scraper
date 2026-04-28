@@ -1,14 +1,17 @@
-﻿services:
+services:
   - type: cron
     name: zoho-job-scraper
-    env: python
+    runtime: python
     buildCommand: |
       pip install -r requirements.txt
-      playwright install chromium --with-deps
-    startCommand: python find_companes.py
-    schedule: "0 */6 * * *"
+      playwright install chromium
+      playwright install-deps
+    startCommand: python script.py
+    schedule: "0 */8 * * *"  # Runs every 8 hours
     envVars:
       - key: PLAYWRIGHT_BROWSERS_PATH
         value: "0"
       - key: PYTHONUNBUFFERED
         value: "1"
+      - key: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
+        value: "0"
