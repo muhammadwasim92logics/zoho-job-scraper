@@ -1,16 +1,9 @@
-name: Zoho Partner Scraper
+name: Zoho Job Scraper
 
 on:
   schedule:
-    # Runs every 6 hours
     - cron: '0 */6 * * *'
-  workflow_dispatch:  # Allows manual trigger from GitHub UI
-  push:
-    branches: [ main ]
-    paths:
-      - 'phase1_scraper.py'
-      - 'phase2_scraper.py'
-      - 'requirements.txt'
+  workflow_dispatch:
 
 jobs:
   scrape:
@@ -20,7 +13,7 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     
-    - name: Set up Python
+    - name: Setup Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
@@ -28,93 +21,20 @@ jobs:
     - name: Install dependencies
       run: |
         pip install --upgrade pip
-        pip install playwright beautifulsoup4 lxml
+        pip install requests beautifulsoup4 lxml
     
-    - name: Install Playwright browsers
-      run: |
-        playwright install chromium
-        playwright install-deps
-    
-    - name: Verify installation
-      run: |
-        python --version
-        pip list | grep playwright
-        pip list | grep beautifulsoup4
-    
-    - name: Run Phase 1 Scraper
+    - name: Run Phase 1
       run: python phase1_scraper.py
-      continue-on-error: false
     
-    - name: Run Phase 2 Scraper
-      run: python phase2_scraper.py
-      continue-on-error: false
+    - name: Run Phase 2
+      run: python phase2_contacts.py
     
-    - name: Display Phase 1 Results
-      run: |
-        echo "========================================="
-        echo "PHASE 1 SCRAPING RESULTS"
-        echo "========================================="
-        
-        if [ -f "All_Zoho_Companies_With_Source.csv" ]; then
-          echo ""
-          echo "📊 Phase 1 Results:"
-          echo "   Total companies: $(($(wc -l < All_Zoho_Companies_With_Source.csv) - 1))"
-          echo ""
-          echo "   First 10 companies found:"
-          head -n 11 All_Zoho_Companies_With_Source.csv
-        else
-          echo "❌ Phase 1 output file not found!"
-        fi
-    
-    - name: Display Phase 2 Results
-      run: |
-        echo ""
-        echo "========================================="
-        echo "PHASE 2 SCRAPING RESULTS"
-        echo "========================================="
-        
-        if [ -f "companies_contacts_fixed.csv" ]; then
-          echo ""
-          echo "📊 Phase 2 Results:"
-          TOTAL=$(($(wc -l < companies_contacts_fixed.csv) - 1))
-          echo "   Total processed: $TOTAL"
-          
-          if [ $TOTAL -gt 0 ]; then
-            WITH_EMAIL=$(tail -n +2 companies_contacts_fixed.csv | cut -d',' -f3 | grep -v '^""$' | grep -v '^$' | wc -l)
-            WITH_PHONE=$(tail -n +2 companies_contacts_fixed.csv | cut -d',' -f4 | grep -v '^""$' | grep -v '^$' | wc -l)
-            ZOHO_PARTNERS=$(tail -n +2 companies_contacts_fixed.csv | cut -d',' -f5 | grep -i '"Yes"' | wc -l)
-            
-            echo "   Companies with email: $WITH_EMAIL"
-            echo "   Companies with phone: $WITH_PHONE"
-            echo "   Zoho Partners found: $ZOHO_PARTNERS"
-            echo ""
-            echo "   Sample contacts (first 5):"
-            head -n 6 companies_contacts_fixed.csv
-          fi
-        else
-          echo "❌ Phase 2 output file not found!"
-        fi
-    
-    - name: Upload results as artifacts
+    - name: Upload results
+      if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: scraper-results-${{ github.run_id }}
-        path: |
-          All_Zoho_Companies_With_Source.csv
-          companies_contacts_fixed.csv
-          phase1_progress.json
-          phase2_progress.json
-          master_progress.json
-        retention-days: 30
-        if-no-files-found: warn
-    
-    - name: Upload logs on failure
-      if: failure()
-      uses: actions/upload-artifact@v4
-      with:
-        name: scraper-logs-failed-${{ github.run_id }}
+        name: zoho-companies-data
         path: |
           *.csv
           *.json
-          *.log
-        retention-days: 7
+        retention-days: 30
